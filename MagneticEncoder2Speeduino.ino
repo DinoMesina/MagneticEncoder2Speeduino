@@ -23,10 +23,10 @@
 
 /*
 
- ENCODER PIN_A 2
- ENCODER PIN_B 3
+ ENCODER PIN_A = 2
+ ENCODER PIN_B or PIN_Z = 3 (depends on the function called by the interrupt)
 
- OUTPUT PIN 8
+ OUTPUT PIN = 8
  
  Magnetic encoder: Magntek© MT6826S https://www.magntek.com.cn/en
  https://www.magntek.com.cn/upload/pdf/202407/MT6826S_Datasheet_Rev.1.1.pdf
@@ -145,8 +145,8 @@ void setup() {
   Serial.print(current_res);
   Serial.println(" CPR");
 
-  attachInterrupt(digitalPinToInterrupt(2), gestisciEncoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(3), gestisciEncoder, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(2), manageEncoderAZ, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(3), manageEncoderAZ, CHANGE);
 
   Serial.println("? for valid commands");
 }
@@ -230,7 +230,8 @@ void loop() {
   delay(500);
 }
 
-void gestisciEncoder() {
+// A B Non resetta mai e conta tutti i fronti quindi un giro completo corrisponde a CPR_X4 
+void manageEncoderAB() {
   // Lettura rapida stato Pin 2 e 3
   byte pins = PIND;
   bool a = (pins >> 2) & 1;
@@ -281,6 +282,62 @@ void gestisciEncoder() {
     }
   }
 }
+
+// A Z Legge solo i fronti di A e resetta ad ogni giro tramite il fronte di salita di Z, un giro corrisponde a CPR_X2 
+void manageEncoderAZ() {
+  /*
+   When the magnet rotates counter-clock-wise (CCW)
+
+   A __|‾‾|__|‾‾|__|‾‾|__|‾‾|_
+
+   B _|‾‾|__|‾‾|__|‾‾|__|‾‾|__
+
+   Z _____|‾|_________________
+   
+   The motor always rotates in the same direction so I can only read PIN A and Z,
+   PIN A will indicate the angle and PIN Z will reset the count.
+   In this way fewer resources are used and the synchronization is checked at each revolution.
+   */
+
+  // Lettura rapida stato Pin 2 e 3
+  byte pins = PIND;
+  bool a = (pins >> 2) & 1;
+  bool z = (pins >> 3) & 1;
+
+  // Aggiornamento posizione (Quadratura 4x)
+  static bool lastA, lastZ;
+  if (z && !lastZ) {
+    edge_counter = value_to_add;
+    lastA = a;
+  } else if (a != lastA) {
+    edge_counter++; 
+    lastA = a;
+  }
+  lastZ = z;
+
+  // Normalizzazione da 0 a (CPR_X2 -1) (Un giro completo)
+  if (edge_counter >= CPR_X2) edge_counter -= CPR_X2;
+
+  // Logica Ruota Fonica (Mezzo giro = CPR fronti)
+  uint16_t pos_rel;
+  if (edge_counter >= CPR) pos_rel = edge_counter - CPR;
+  else pos_rel = edge_counter;
+
+  if (pos_rel >= (CPR - 2)) {
+    // ULTIMO SETTORE: Dente mancante (Pin LOW)
+    PORTB &= ~(1 << 0); // Pin 8 LOW
+  } else {
+    // Onda quadra basata sul bit 0 (pari/dispari)
+    // Se pos_rel è dispari (1, 3, 5...) -> LOW
+    // Se pos_rel è pari (0, 2, 4...) -> HIGH
+    if (pos_rel & 1) { 
+      PORTB &= ~(1 << 0); // Pin 8 LOW
+    } else {
+      PORTB |= (1 << 0); // Pin 8 HIGH 
+    }
+  }
+}
+
 
 /*
  * Lettura posizione con verifica CRC
