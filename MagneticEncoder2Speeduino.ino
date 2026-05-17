@@ -27,6 +27,11 @@
  ENCODER PIN_B or PIN_Z = 3 (depends on the function called by the interrupt)
 
  OUTPUT PIN = 8
+ Chip Select = 10
+ LED0 = A0
+ LED1 = A1
+ LED2 = A2
+ LED3 = A3
  
  Magnetic encoder: Magntek© MT6826S https://www.magntek.com.cn/en
  https://www.magntek.com.cn/upload/pdf/202407/MT6826S_Datasheet_Rev.1.1.pdf
@@ -95,27 +100,52 @@ struct AngleData {
   bool crc_valid;          // true se CRC corrisponde
 } data;
 
+byte LEDS = 1; // variabile per accendere o spegere i led
+bool ledSxDx = true; // Se vale True va da Sx a Dx altrimenti da Dx a Sx 
+
 void setup() {
   Serial.begin(115200);
-
-  // Se la EEPROM contiene il dato lo leggo 
-  uint8_t data_zero;
-  EEPROM.get(0, data_zero);
-  if (data_zero == magic_number) {
-    EEPROM.get(start_address, value_to_add);
-  }
-
+  
+  // setto i PIN per la comunicazione con l'encoder magnetico utilizzati dalla funzione chiamata dagli interrupt
   pinMode(2, INPUT_PULLUP);
   pinMode(3, INPUT_PULLUP);
+  // setto il PIN CircuitSelect
   pinMode(CS_PIN, OUTPUT);
+  // setto il PIN di output verso Speeduino
   pinMode(8, OUTPUT);
+  // pin per i led   
+  pinMode(10, OUTPUT);
+  pinMode(11, OUTPUT);
+  pinMode(12, OUTPUT);
+  pinMode(13, OUTPUT);
 
+  // Al BOOT accendo e spengo 3 volte tutti e 4 i led 
+  PORTC |= B00001111; // Porta contemporaneamente a HIGH i pin A0, A1, A2 e A3
+  delay(250);
+  PORTC &= B11110000; // Porta contemporaneamente a LOW i pin A0, A1, A2 e A3
+  delay(250);
+  PORTC |= B00001111; // Porta contemporaneamente a HIGH i pin A0, A1, A2 e A3
+  delay(250);
+  PORTC &= B11110000; // Porta contemporaneamente a LOW i pin A0, A1, A2 e A3
+  delay(250);
+  PORTC |= B00001111; // Porta contemporaneamente a HIGH i pin A0, A1, A2 e A3
+  delay(250);
+  PORTC &= B11110000; // Porta contemporaneamente a LOW i pin A0, A1, A2 e A3
+  delay(250);
+  
   // Inizializzazione SPI
   digitalWrite(CS_PIN, HIGH); // Deseleziona il chip all'inizio
   SPI.begin();
   // MT6826 solitamente supporta velocità elevate. Usiamo Mode 3 (o Mode 1 in base al datasheet)
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE3));
-
+  
+  // Se la EEPROM contiene dati li leggo 
+  uint8_t data_zero;
+  EEPROM.get(0, data_zero);
+  if (data_zero == magic_number) {
+    EEPROM.get(start_address, value_to_add);
+  }
+  
   // Prova a leggere più volte in caso di CRC errato
   int error;
   int num_error = 0;
@@ -135,20 +165,39 @@ void setup() {
     } else {
       Serial.print(++num_error);
       Serial.println(" Encoder reading error :(");
-      delay(300);
+      // segnalo l'anomalia accendendo e spegnendo rapidamente i led ai PIN A0 e A2
+      PORTC |= B00000101; // Porta contemporaneamente a HIGH i pin A0 e A2
+      delay(250);
+      PORTC &= B11111010; // Porta contemporaneamente a LOW i pin A0 e A2
+      delay(50);
     }
   } while (error);
-
+  
   // Legge la risoluzione attuale dell'encoder 
   uint16_t current_res = getABZResolution();
   Serial.print("Current ABZ resolution: ");
   Serial.print(current_res);
   Serial.println(" CPR");
-
+  
   attachInterrupt(digitalPinToInterrupt(2), manageEncoderAZ, CHANGE);
   attachInterrupt(digitalPinToInterrupt(3), manageEncoderAZ, CHANGE);
-
+  
   Serial.println("? for valid commands");
+
+  // Fine setup, segnalo accendendo in sequenza i LED 
+  PORTC |= B00000001;
+  delay(330);
+  PORTC |= B00000010;
+  delay(330);
+  PORTC |= B00000100;
+  delay(330);
+  PORTC |= B00001000;
+  delay(330);
+  // spengo tutti i LED
+  PORTC &= B11110000;
+  delay(500);
+  // accendo il primo LED
+  PORTC |= LEDS;
 }
 
 void loop() {
@@ -231,7 +280,29 @@ void loop() {
       Serial.println("READ ERROR :(");
     }
   }
+  // attendo mezzo secondo 
   delay(500);
+  /* Per segnalare il normale funzionamento del firmware faccio
+   * l'effetto "Supercar" con i 4 led 
+   */
+  if (ledSxDx) {
+    // Scorre da Sx a Dx
+    LEDS = (LEDS << 1);
+  } else {
+    // Scorre da Dx a Sx
+    LEDS = (LEDS >> 1);
+  }
+  if (LEDS >= 16) { 
+    ledSxDx = false;
+    LEDS = (LEDS >> 2);
+  } else if (LEDS < 1) {
+    ledSxDx = true;
+    LEDS = 2; 
+  }
+  // Spengo tutti i LED
+  PORTC &= B11110000; 
+  // Accendo quelli corrispondenti al conteggio 
+  PORTC |= LEDS;
 }
 
 // A B Non resetta mai e conta tutti i fronti quindi un giro completo corrisponde a CPR_X4 
